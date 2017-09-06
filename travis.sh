@@ -12,3 +12,6 @@ git clone --depth 1 -b v4.12.7 git://git.kernel.org/pub/scm/linux/kernel/git/sta
 cp /tmp/initramfs.linux_amd64.cpio linux-stable
 (cd linux-stable && cp ../CONFIG .config && make oldconfig &&make -j 8)
 
+git clone -b 3f3a496a23088731e4ab5654b02fbc13a6881c65 https://chromium.googlesource.com/chromiumos/platform/vboot_reference
+(cd vboot_reference && make)
+

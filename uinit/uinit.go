@@ -22,7 +22,7 @@ const tczs = "/tcz/8.x/*/tcz/*.tcz"
 
 var (
 	cmdline = make(map[string]string)
-	debug = func(string, ...interface{}) {}
+	debug   = func(string, ...interface{}) {}
 	verbose bool
 )
 
@@ -163,6 +163,9 @@ func main() {
 	}
 	if err := os.Symlink("/bin/bash", "/bin/sh"); err != nil {
 		log.Printf("symlink /bin/bash to /bin/sh: ", err)
+	}
+	if y, ok := cmdline["uinitssh"]; ok && y == "yes" {
+		go sshd()
 	}
 	cmd = exec.Command("xinit")
 	if o, err := cmd.CombinedOutput(); err != nil {

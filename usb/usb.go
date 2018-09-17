@@ -8,8 +8,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	flag "github.com/spf13/pflag"
 	"fmt"
+	flag "github.com/spf13/pflag"
 	"io"
 	"io/ioutil"
 	"log"
@@ -26,7 +26,14 @@ import (
 	"github.com/u-root/u-root/pkg/gpt"
 )
 
-const initramfs = "initramfs.linux_amd64.cpio"
+type arch struct {
+	arch      string
+	args      []string
+	initramfs string
+	kernel    string
+	version   string
+	config    string
+}
 
 var (
 	configTxt = `loglevel=1
@@ -39,7 +46,7 @@ rootwait
 	skipkern = flag.Bool("skipkern", false, "Don't put the kern onto usb")
 	keys     = flag.String("keys", "vboot_reference/tests/devkeys", "where the keys live")
 	dev      = flag.String("dev", "/dev/null", "What device to use")
-	config   = flag.String("config", "CONFIG", "Linux config file")
+	config   = flag.String("config", "", "Linux config file")
 	extra    = flag.String("extra", "", "Comma-separated list of extra packages to include")
 	kernDev  string
 	rootDev  string
@@ -47,7 +54,6 @@ rootwait
 
 	kernelVersion = "v4.12.7"
 	workingDir    = ""
-	linuxVersion  = "linux-stable"
 	homeDir       = ""
 	packageList   = []string{
 		"bc",
@@ -71,6 +77,10 @@ rootwait
 		"etc":    true,
 	}
 	threads = runtime.NumCPU() + 2 // Number of threads to use when calling make.
+	arches  = map[string]*arch{
+		"amd64": &arch{arch: "x86_64", initramfs: "initramfs.linux_amd64.cpio", kernel: "/arch/x86/boot/bzImage", args: []string{"ARCH=x86_64"}, version: "linux-stable", config: "CONFIG.x86_64"},
+	}
+	buildArch = arches["amd64"]
 )
 
 func cp(inputLoc string, outputLoc string) error {
@@ -164,7 +174,7 @@ func aptget() error {
 }
 
 func cleanup() error {
-	filesToRemove := [...]string{"linux-stable", "vboot_reference", "linux-firmware"}
+	filesToRemove := [...]string{buildArch.version, "vboot_reference", "linux-firmware"}
 	fmt.Printf("-------- Removing problematic files %v\n", filesToRemove)
 	for _, file := range filesToRemove {
 		if _, err := os.Stat(file); err != nil {
@@ -187,7 +197,7 @@ func goGet() error {
 }
 
 func goBuildStatic() error {
-	oFile := filepath.Join(workingDir, "linux-stable", initramfs)
+	oFile := filepath.Join(workingDir, buildArch.version, buildArch.initramfs)
 	bbpath := filepath.Join(os.Getenv("GOPATH"), "src/github.com/u-root/u-root")
 	args := []string{"run", "u-root.go", "-o", oFile, "-build=bb", "core"}
 	cmd := exec.Command("go", append(args, staticCmdList...)...)
@@ -201,7 +211,7 @@ func goBuildStatic() error {
 }
 
 func goBuildDynamic() error {
-	args := []string{"run", "u-root.go", "-o", filepath.Join(workingDir, initramfs)}
+	args := []string{"run", "u-root.go", "-o", filepath.Join(workingDir, buildArch.initramfs)}
 	for _, v := range []string{"usr", "lib", "tcz", "etc", "upspin", ".ssh"} {
 		if _, err := os.Stat(v); err != nil {
 			continue
@@ -218,7 +228,7 @@ func goBuildDynamic() error {
 	if err := cmd.Run(); err != nil {
 		return err
 	}
-	fmt.Printf("Created %v", initramfs)
+	fmt.Printf("Created %v", buildArch.initramfs)
 	return nil
 }
 
@@ -262,7 +272,7 @@ func chrome() error {
 }
 
 func kernelGet() error {
-	var args = []string{"clone", "--depth", "1", "-b", kernelVersion, "git://git.kernel.org/pub/scm/linux/kernel/git/stable/" + linuxVersion + ".git"}
+	var args = []string{"clone", "--depth", "1", "-b", kernelVersion, "git://git.kernel.org/pub/scm/linux/kernel/git/stable/" + buildArch.version + ".git"}
 	fmt.Printf("-------- Getting the kernel via git %v\n", args)
 	cmd := exec.Command("git", args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
@@ -285,22 +295,22 @@ func firmwareGet() error {
 	return nil
 }
 func buildKernel() error {
-	if err := cp(*config, "linux-stable/.config"); err != nil {
-		fmt.Printf("copying %v to linux-stable/.config: %v", *config, err)
+	if err := cp(buildArch.config, "linux-stable/.config"); err != nil {
+		fmt.Printf("copying %v to linux-stable/.config: %v", buildArch.config, err)
 	}
 	// load NiChrome logo into kernel
 	cp("logo/logo_linux_clut224.ppm", "linux-stable/drivers/video/logo/logo_linux_clut224.ppm")
 
-	cmd := exec.Command("make", "--directory", "linux-stable", "-j"+strconv.Itoa(threads))
+	cmd := exec.Command("make", "--directory", buildArch.version, "-j"+strconv.Itoa(threads))
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	// TODO: this is OK for now. Later we'll need to do something
 	// with a map and GOARCH.
-	cmd.Env = append(os.Environ(), "ARCH=x86_64")
+	cmd.Env = append(os.Environ(), buildArch.args...)
 	err := cmd.Run()
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(filepath.Join("linux-stable", "/arch/x86/boot/bzImage")); err != nil {
+	if _, err := os.Stat(filepath.Join(buildArch.version, buildArch.kernel)); err != nil {
 		return err
 	}
 	fmt.Printf("bzImage created")
@@ -374,11 +384,11 @@ func vbutilIt() error {
 	if err := ioutil.WriteFile("nocontent.efi", []byte("no content"), 0777); err != nil {
 		return err
 	}
-	bzImage := "linux-stable/arch/x86/boot/bzImage"
-	fmt.Printf("Bz image is located at %s \n", bzImage)
+	k := filepath.Join(buildArch.version, buildArch.kernel)
+	fmt.Printf("Bz image is located at %s \n", k)
 	keyblock := filepath.Join(*keys, "recovery_kernel.keyblock")
 	sign := filepath.Join(*keys, "recovery_kernel_data_key.vbprivk")
-	cmd := exec.Command("./vboot_reference/build/futility/futility", "vbutil_kernel", "--pack", newKern, "--keyblock", keyblock, "--signprivate", sign, "--version", "1", "--vmlinuz", bzImage, "--bootloader", "nocontent.efi", "--config", "config.txt", "--arch", "x86")
+	cmd := exec.Command("./vboot_reference/build/futility/futility", "vbutil_kernel", "--pack", newKern, "--keyblock", keyblock, "--signprivate", sign, "--version", "1", "--vmlinuz", k, "--bootloader", "nocontent.efi", "--config", "config.txt", "--arch", "x86")
 	stdoutStderr, err := cmd.CombinedOutput()
 	fmt.Printf("%s\n", stdoutStderr)
 	return err
@@ -399,7 +409,7 @@ func kerndd() error {
 }
 
 func rootdd() error {
-	return dd("tcz initramfs CPIO archive", rootDev, filepath.Join(workingDir, "initramfs.linux_amd64.cpio"))
+	return dd("tcz initramfs CPIO archive", rootDev, filepath.Join(workingDir, buildArch.initramfs))
 }
 
 func lsr(dirs []string, w io.Writer) error {
@@ -504,6 +514,9 @@ func allFunc() error {
 
 func main() {
 	flag.Parse()
+	if *config != "" {
+		buildArch.config = *config
+	}
 	if *extra != "" {
 		dynamicCmdList = append(dynamicCmdList, strings.Split(*extra, ",")...)
 	}

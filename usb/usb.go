@@ -41,6 +41,7 @@ rootwait
 	dev      = flag.String("dev", "/dev/null", "What device to use")
 	config   = flag.String("config", "CONFIG", "Linux config file")
 	extra    = flag.String("extra", "", "Comma-separated list of extra packages to include")
+	hosted = flag.Bool("hosted", false, "Build an image for 'hosted' system, i.e. just a cpio to install into a ChromeOS root -- no kernel, no dd step, etc.")
 	kernDev  string
 	rootDev  string
 	kernPart = 2
@@ -70,6 +71,8 @@ rootwait
 		"upspin": true,
 		"etc":    true,
 	}
+	// when we are not hosted we have to supply our own /usr and /lib
+	standAloneDirs = []string{"usr", "lib", "etc", "tcz"}
 	threads = runtime.NumCPU() + 2 // Number of threads to use when calling make.
 )
 
@@ -202,7 +205,10 @@ func goBuildStatic() error {
 
 func goBuildDynamic() error {
 	args := []string{"run", "u-root.go", "-o", filepath.Join(workingDir, initramfs)}
-	for _, v := range []string{"usr", "lib", "tcz", "etc", "upspin", ".ssh"} {
+	if *hosted {
+		args = append(args, "-base=/dev/null", "-initcmd=", "-defaultsh=")
+	}
+	for _, v := range append(standAloneDirs, "upspin", ".ssh") {
 		if _, err := os.Stat(v); err != nil {
 			continue
 		}
@@ -466,20 +472,20 @@ func allFunc() error {
 		{f: cleanup, skip: *skipkern || *skiproot || !*fetch, ignore: false, n: "cleanup"},
 		{f: goGet, skip: *skipkern || !*fetch, ignore: false, n: "Get u-root source"},
 		{f: tcz, skip: *skiproot || !*fetch, ignore: false, n: "run tcz to create the directory of packages"},
-		{f: getSUIDbinaries, skip: *skiproot, ignore: false, n: "Get SUID binaries"},
-		{f: chrome, skip: *skiproot || !*fetch, ignore: false, n: "Fetch chrome"},
-		{f: aptget, skip: !*apt, ignore: false, n: "apt get"},
+		{f: getSUIDbinaries, skip: *hosted || *skiproot, ignore: false, n: "Get SUID binaries"},
+		{f: chrome, skip: *hosted || *skiproot || !*fetch, ignore: false, n: "Fetch chrome"},
+		{f: aptget, skip: *hosted || !*apt, ignore: false, n: "apt get"},
 		{f: goBuildDynamic, skip: *skiproot, ignore: false, n: "Build dynamic initramfs"},
-		{f: rootdd, skip: *skiproot, ignore: false, n: "Put the tcz cpio onto the stick"},
-		{f: kernelGet, skip: *skipkern || !*fetch, ignore: false, n: "Git clone the kernel"},
-		{f: goBuildStatic, skip: *skipkern, ignore: false, n: "Build static initramfs"},
-		{f: firmwareGet, skip: *skipkern || !*fetch, ignore: false, n: "Git clone the firmware files"},
-		{f: buildKernel, skip: *skipkern, ignore: false, n: "build the kernel"},
-		{f: getVbutil, skip: *skipkern || !*fetch, ignore: false, n: "git clone vbutil"},
-		{f: buildVbutil, skip: *skipkern, ignore: false, n: "build vbutil"},
-		{f: installUrootGpt, skip: *skipkern, ignore: false, n: "install u-root gpt"},
-		{f: vbutilIt, skip: *skipkern, ignore: false, n: "vbutil and create a kernel image"},
-		{f: kerndd, skip: *skipkern, ignore: false, n: "Put the kernel image onto the stick"},
+		{f: rootdd, skip: *hosted || *skiproot, ignore: false, n: "Put the tcz cpio onto the stick"},
+		{f: kernelGet, skip: *hosted || *skipkern || !*fetch, ignore: false, n: "Git clone the kernel"},
+		{f: goBuildStatic, skip: *hosted || *skipkern, ignore: false, n: "Build static initramfs"},
+		{f: firmwareGet, skip: *hosted || *skipkern || !*fetch, ignore: false, n: "Git clone the firmware files"},
+		{f: buildKernel, skip: *hosted || *skipkern, ignore: false, n: "build the kernel"},
+		{f: getVbutil, skip: *hosted || *skipkern || !*fetch, ignore: false, n: "git clone vbutil"},
+		{f: buildVbutil, skip: *hosted || *skipkern, ignore: false, n: "build vbutil"},
+		{f: installUrootGpt, skip: *hosted || *skipkern, ignore: false, n: "install u-root gpt"},
+		{f: vbutilIt, skip: *hosted || *skipkern, ignore: false, n: "vbutil and create a kernel image"},
+		{f: kerndd, skip: *hosted || *skipkern, ignore: false, n: "Put the kernel image onto the stick"},
 	}
 
 	for _, c := range cmds {
@@ -504,6 +510,9 @@ func allFunc() error {
 
 func main() {
 	flag.Parse()
+	if *hosted {
+		standAloneDirs = []string{}
+	}
 	if *extra != "" {
 		dynamicCmdList = append(dynamicCmdList, strings.Split(*extra, ",")...)
 	}
